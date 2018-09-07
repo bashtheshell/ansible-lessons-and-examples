@@ -1,0 +1,97 @@
+---
+- hosts: all
+  become: true
+  tasks:
+    - name: Install required tools
+      apt: name={{item}} state=present
+      with_items:
+        - unzip
+     # PHP
+    - name: Add the ondrej PHP PPA
+      apt_repository: repo='ppa:ondrej/php'
+    - name: Update the apt cache
+      apt: update_cache=yes cache_valid_time=3600
+    - name: Install PHP
+      apt: name=php state=present
+    - name: Install PHP
+      apt: name={{item}} state=present
+      with_items:
+        - php
+        - php-fpm
+        - php-mysql
+        - php-xml
+    - name: Remove apache2
+      apt: name=apache2 state=absent
+    # MySQL
+    - name: Install MySQL
+      apt: name={{item}}
+      with_items:
+        - mysql-server-5.6
+        - python-mysqldb
+    - name: Generate new root password
+      command: openssl rand -hex 7 creates=/root/.my.cnf
+      register: mysql_new_root_pass
+    - name: Remove anonymous users
+      mysql_user: name="" state=absent
+      when: mysql_new_root_pass.changed
+    - name: Remove test database
+      mysql_db: name=test state=absent
+      when: mysql_new_root_pass.changed
+    - name: Update root password
+      mysql_user: name=root host={{item}} password={{mysql_new_root_pass.stdout}}
+      with_items:
+        - "{{ ansible_hostname }}"
+        - 127.0.0.1
+        - ::1
+        - localhost
+      when: mysql_new_root_pass.changed
+    - name: Create my.cnf
+      template: src=templates/mysql/my.cnf dest=/root/.my.cnf 
+      when: mysql_new_root_pass.changed
+    # nginx
+    - name: Install nginx
+      apt: name=nginx state=present
+    - name: Start nginx
+      service: name=nginx state=started
+    - name: Create nginx config
+      template: src=templates/nginx/default dest=/etc/nginx/sites-available/default
+      notify: restart nginx
+    # Wordpress
+    - name: Copy wordpress.zip into tmp
+      copy: src=files/wordpress.zip dest=/tmp/wordpress.zip
+    - name: Unzip WordPress
+      unarchive: src=/tmp/wordpress.zip dest=/tmp copy=no creates=/tmp/wordpress/wp-settings.php
+    - name: Create project folder
+      file: dest=/var/www/book.example.com state=directory
+    - name: Copy WordPress files
+      command: cp -a /tmp/wordpress/. /var/www/book.example.com creates=/var/www/book.example.com/wp-settings.php
+    - name: Create WordPress MySQL database
+      mysql_db: name=wordpress state=present
+    - name: Create WordPress MySQL user
+      mysql_user: name=wordpress host=localhost password=bananas priv=wordpress.*:ALL
+    - name: Create wp-config
+      template: src=templates/wordpress/wp-config.php dest=/var/www/book.example.com/wp-config.php
+    - name: Does the database exist?
+      command: mysql -u root wordpress -e "SELECT ID FROM wordpress.wp_users LIMIT 1;"
+      register: db_exist
+      ignore_errors: true
+      changed_when: false
+    - name: Copy WordPress DB
+      copy: src=files/wp-database.sql dest=/tmp/wp-database.sql
+      when: db_exist.rc > 0
+    - name: Import WordPress DB
+      mysql_db: target=/tmp/wp-database.sql state=import name=wordpress
+      when: db_exist.rc > 0
+    - name: Update the Imported WordPress DB
+      command: "{{ item }}"
+      when: db_exist.rc > 0
+      ignore_errors: true
+      changed_when: false 
+      with_items:
+        - mysql -u root wordpress -e "UPDATE wp_options SET option_value='http://{{ ansible_default_ipv4.address }}' WHERE option_name='siteurl' OR option_name='home';"
+        - mysql -u root wordpress -e "UPDATE wp_users SET user_registered=now();"
+        - mysql -u root wordpress -e "UPDATE wp_posts SET post_date=now(),post_date_gmt=now();"
+        - mysql -u root wordpress -e "UPDATE wp_comments SET comment_date=now(),comment_date_gmt=now();"
+  handlers:
+    - name: restart nginx
+      service: name=nginx state=restarted
