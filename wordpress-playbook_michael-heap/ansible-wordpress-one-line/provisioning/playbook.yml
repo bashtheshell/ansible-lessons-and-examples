@@ -2,6 +2,8 @@
 - hosts: all
   become: true
   tasks:
+    - debug:
+        msg: "The IP address of this server is '{{ ansible_default_ipv4.address }}'."
     - name: Install required tools
       apt: name={{item}} state=present
       with_items:
@@ -11,8 +13,6 @@
       apt_repository: repo='ppa:ondrej/php'
     - name: Update the apt cache
       apt: update_cache=yes cache_valid_time=3600
-    - name: Install PHP
-      apt: name=php state=present
     - name: Install PHP
       apt: name={{item}} state=present
       with_items:
